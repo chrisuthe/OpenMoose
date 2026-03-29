@@ -8,6 +8,8 @@
     <UseWindowsForms>true</UseWindowsForms>
     <PlatformTarget>x86</PlatformTarget>
     <ApplicationIcon>mooseicon.ico</ApplicationIcon>
+    <ApplicationColorMode>Dark</ApplicationColorMode>
+    <ApplicationDefaultFont>Segoe UI, 9pt</ApplicationDefaultFont>
     <Version>1.0.69.0</Version>
     <Company>NEF</Company>
     <Product>Open Moose</Product>
