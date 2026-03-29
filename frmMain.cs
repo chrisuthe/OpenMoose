@@ -695,37 +695,91 @@ namespace J2534
         {
             this.lblLogTime.Text = this.getLogTimeSeconds(false) + "s";
 
-            if (!this.chkshowvitals.Checked)
-                return;
-
-            var boostList = this.eVars.Where(x => x.name.Contains("pvdkds_w")).ToList();
-            if (boostList.Count > 0)
+            // Update Datalog tab vitals
+            if (this.chkshowvitals.Checked)
             {
-                if (this.chkPSI.Checked)
+                var boostList = this.eVars.Where(x => x.name.Contains("pvdkds_w")).ToList();
+                if (boostList.Count > 0)
                 {
-                    double num = (double.Parse(boostList[0].result) - 1000.0) / 68.9475729;
-                    this.vitals_boost.Text = this.logger.getDoublePrecision(num > 0.0 ? num : 0.0, boostList[0].precision);
+                    if (this.chkPSI.Checked)
+                    {
+                        double num = (double.Parse(boostList[0].result) - 1000.0) / 68.9475729;
+                        this.vitals_boost.Text = this.logger.getDoublePrecision(num > 0.0 ? num : 0.0, boostList[0].precision);
+                    }
+                    else
+                        this.vitals_boost.Text = boostList[0].result;
                 }
-                else
-                    this.vitals_boost.Text = boostList[0].result;
+
+                var lambdaList = this.eVars.Where(x => x.name.Contains("lamsoni_w")).ToList();
+                if (lambdaList.Count > 0)
+                    this.vitals_lambda.Text = lambdaList[0].result;
+
+                var retardList = this.eVars.Where(x => x.name.Contains("wkrm")).ToList();
+                if (retardList.Count > 0)
+                    this.vitals_retard.Text = retardList[0].result;
+
+                var fuelList = this.eVars.Where(x => x.name.Contains("pistnd_w")).ToList();
+                if (fuelList.Count > 0)
+                    this.vitals_fuelpressure.Text = fuelList[0].result;
+
+                var customList = this.eVars.Where(x => x.name.Contains(this.comboBox_xmlparams.SelectedValue?.ToString() ?? "")).ToList();
+                if (customList.Count > 0)
+                    this.vitals_custom.Text = customList[0].result;
             }
 
-            var lambdaList = this.eVars.Where(x => x.name.Contains("lamsoni_w")).ToList();
-            if (lambdaList.Count > 0)
-                this.vitals_lambda.Text = lambdaList[0].result;
+            // Update Dashboard tab gauges and cells
+            UpdateDashboard();
+        }
 
-            var retardList = this.eVars.Where(x => x.name.Contains("wkrm")).ToList();
-            if (retardList.Count > 0)
-                this.vitals_retard.Text = retardList[0].result;
+        /// <summary>
+        /// Updates all dashboard gauges and value cells with current ECU data.
+        /// Called from UpdateLoggingUI on the UI thread at ~20Hz.
+        /// Gracefully handles missing variables (shows "--" when not in config).
+        /// </summary>
+        private void UpdateDashboard()
+        {
+            this.lblDashStatus.Text = "LIVE  " + this.getLogTimeSeconds(false) + "s";
+            this.lblDashStatus.ForeColor = Color.FromArgb(72, 180, 120);
 
-            // BUG FIX: was checking retardList.Count instead of fuelList.Count
-            var fuelList = this.eVars.Where(x => x.name.Contains("pistnd_w")).ToList();
-            if (fuelList.Count > 0)
-                this.vitals_fuelpressure.Text = fuelList[0].result;
+            UpdateDashCell("nmot_w", v => this.gaugeRpm.Value = v);
+            UpdateDashCell("pvdkds_w", v =>
+            {
+                double bar = (v - 1013.0) / 1000.0; // mbar to bar gauge pressure
+                this.gaugeBoost.Value = bar;
+            });
 
-            var customList = this.eVars.Where(x => x.name.Contains(this.comboBox_xmlparams.SelectedValue?.ToString() ?? "")).ToList();
-            if (customList.Count > 0)
-                this.vitals_custom.Text = customList[0].result;
+            UpdateDashValue("lamsoni_w", this.cellLambda);
+            UpdateDashValue("wkrm", this.cellKnock);
+            UpdateDashValue("zwout", this.cellTiming);
+            UpdateDashValue("ldtvm", this.cellWastegate);
+            UpdateDashValue("tans", this.cellIat);
+            UpdateDashValue("tmot", this.cellCoolant);
+            UpdateDashValue("mshfm_w", this.cellMaf);
+            UpdateDashValue("rl_w", this.cellLoad);
+            UpdateDashValue("pistnd_w", this.cellFuelPressure);
+            UpdateDashValue("fra_w", this.cellLtft);
+            UpdateDashValue("wped_w", this.cellPedal);
+            UpdateDashValue("vfzg_w", this.cellSpeed);
+        }
+
+        private void UpdateDashCell(string varName, Action<double> setter)
+        {
+            var match = this.eVars.FirstOrDefault(x => x.name.Contains(varName));
+            if (match != null && !string.IsNullOrEmpty(match.result))
+            {
+                if (double.TryParse(match.result, out double val))
+                    setter(val);
+            }
+        }
+
+        private void UpdateDashValue(string varName, Controls.ValueCell cell)
+        {
+            var match = this.eVars.FirstOrDefault(x => x.name.Contains(varName));
+            if (match != null && !string.IsNullOrEmpty(match.result))
+            {
+                if (double.TryParse(match.result, out double val))
+                    cell.SetValue(match.result, val);
+            }
         }
 
         private void comboBox_xmlparams_SelectedIndexChanged(object sender, EventArgs e)

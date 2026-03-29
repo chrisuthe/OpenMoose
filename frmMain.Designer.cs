@@ -1,5 +1,6 @@
 using System.Drawing;
 using System.Windows.Forms;
+using J2534.Controls;
 
 namespace J2534
 {
@@ -63,6 +64,23 @@ namespace J2534
         private Label vitals_fuelpressure;
         private Label label_custom;
         private Label vitals_custom;
+
+        private TabPage tabPage3;
+        private ArcGauge gaugeRpm;
+        private ArcGauge gaugeBoost;
+        private ValueCell cellLambda;
+        private ValueCell cellKnock;
+        private ValueCell cellTiming;
+        private ValueCell cellWastegate;
+        private ValueCell cellIat;
+        private ValueCell cellCoolant;
+        private ValueCell cellMaf;
+        private ValueCell cellLoad;
+        private ValueCell cellFuelPressure;
+        private ValueCell cellLtft;
+        private ValueCell cellPedal;
+        private ValueCell cellSpeed;
+        private Label lblDashStatus;
 
         private StatusStrip statusStrip;
         private ToolStripStatusLabel tsslStatus;
@@ -195,11 +213,13 @@ namespace J2534
             this.tabControl1 = new TabControl();
             this.tabPage1 = new TabPage();
             this.tabPage2 = new TabPage();
+            this.tabPage3 = new TabPage();
 
             this.tabControl1.Dock = DockStyle.Fill;
             this.tabControl1.Padding = new Point(12, 6);
             this.tabControl1.TabPages.Add(this.tabPage1);
             this.tabControl1.TabPages.Add(this.tabPage2);
+            this.tabControl1.TabPages.Add(this.tabPage3);
 
             // =================================================================
             // TAB 1: FLASH
@@ -474,6 +494,153 @@ namespace J2534
                 this.comboBox_xmlparams, this.chkshowvitals, this.chkPSI,
                 this.cmdStartLogging, this.cmdStopLogging, this.lblLogTime,
                 this.groupBox1
+            });
+
+            // =================================================================
+            // TAB 3: DASHBOARD
+            // =================================================================
+            this.tabPage3.Text = "  Dashboard  ";
+            this.tabPage3.Padding = new Padding(8, 8, 8, 8);
+
+            // Arc gauges - RPM and Boost
+            this.gaugeRpm = new ArcGauge();
+            this.gaugeRpm.Location = new Point(16, 12);
+            this.gaugeRpm.Size = new Size(190, 190);
+            this.gaugeRpm.Label = "ENGINE SPEED";
+            this.gaugeRpm.Units = "rpm";
+            this.gaugeRpm.MinValue = 0;
+            this.gaugeRpm.MaxValue = 7500;
+            this.gaugeRpm.WarningValue = 6000;
+            this.gaugeRpm.DangerValue = 6800;
+            this.gaugeRpm.ValueFormat = "0";
+
+            this.gaugeBoost = new ArcGauge();
+            this.gaugeBoost.Location = new Point(220, 12);
+            this.gaugeBoost.Size = new Size(190, 190);
+            this.gaugeBoost.Label = "BOOST";
+            this.gaugeBoost.Units = "bar";
+            this.gaugeBoost.MinValue = -0.5;
+            this.gaugeBoost.MaxValue = 2.0;
+            this.gaugeBoost.WarningValue = 1.5;
+            this.gaugeBoost.DangerValue = 1.8;
+            this.gaugeBoost.ValueFormat = "0.00";
+
+            // Right-side value cells (2 columns x 4 rows next to gauges)
+            int cellX1 = 430;
+            int cellX2 = 580;
+            int cellX3 = 730;
+            int cellW = 140;
+            int cellH = 72;
+            int cellGap = 6;
+            int rowY(int row) => 12 + row * (cellH + cellGap);
+
+            this.cellLambda = new ValueCell();
+            this.cellLambda.Location = new Point(cellX1, rowY(0));
+            this.cellLambda.Size = new Size(cellW, cellH);
+            this.cellLambda.Label = "LAMBDA";
+            this.cellLambda.Units = "\u03BB";
+            this.cellLambda.WarningLow = 0.78;
+            this.cellLambda.DangerLow = 0.72;
+            this.cellLambda.WarningHigh = 1.05;
+
+            this.cellKnock = new ValueCell();
+            this.cellKnock.Location = new Point(cellX2, rowY(0));
+            this.cellKnock.Size = new Size(cellW, cellH);
+            this.cellKnock.Label = "KNOCK RETARD";
+            this.cellKnock.Units = "deg";
+            this.cellKnock.WarningLow = -3;
+            this.cellKnock.DangerLow = -6;
+
+            this.cellTiming = new ValueCell();
+            this.cellTiming.Location = new Point(cellX3, rowY(0));
+            this.cellTiming.Size = new Size(cellW, cellH);
+            this.cellTiming.Label = "IGN TIMING";
+            this.cellTiming.Units = "deg BTDC";
+
+            this.cellWastegate = new ValueCell();
+            this.cellWastegate.Location = new Point(cellX1, rowY(1));
+            this.cellWastegate.Size = new Size(cellW, cellH);
+            this.cellWastegate.Label = "WASTEGATE";
+            this.cellWastegate.Units = "%";
+
+            this.cellIat = new ValueCell();
+            this.cellIat.Location = new Point(cellX2, rowY(1));
+            this.cellIat.Size = new Size(cellW, cellH);
+            this.cellIat.Label = "INTAKE TEMP";
+            this.cellIat.Units = "\u00B0C";
+            this.cellIat.WarningHigh = 50;
+            this.cellIat.DangerHigh = 65;
+
+            this.cellCoolant = new ValueCell();
+            this.cellCoolant.Location = new Point(cellX3, rowY(1));
+            this.cellCoolant.Size = new Size(cellW, cellH);
+            this.cellCoolant.Label = "COOLANT";
+            this.cellCoolant.Units = "\u00B0C";
+            this.cellCoolant.WarningHigh = 105;
+            this.cellCoolant.DangerHigh = 115;
+
+            // Bottom row of value cells (6 across)
+            int botY1 = 12 + 2 * (cellH + cellGap) + 12;
+            int botY2 = botY1 + cellH + cellGap;
+            int botCellW = 140;
+            int botX(int col) => 16 + col * (botCellW + cellGap);
+
+            this.cellMaf = new ValueCell();
+            this.cellMaf.Location = new Point(botX(0), botY1);
+            this.cellMaf.Size = new Size(botCellW, cellH);
+            this.cellMaf.Label = "MAF";
+            this.cellMaf.Units = "kg/h";
+
+            this.cellLoad = new ValueCell();
+            this.cellLoad.Location = new Point(botX(1), botY1);
+            this.cellLoad.Size = new Size(botCellW, cellH);
+            this.cellLoad.Label = "REL. LOAD";
+            this.cellLoad.Units = "%";
+
+            this.cellFuelPressure = new ValueCell();
+            this.cellFuelPressure.Location = new Point(botX(2), botY1);
+            this.cellFuelPressure.Size = new Size(botCellW, cellH);
+            this.cellFuelPressure.Label = "FUEL PRESSURE";
+            this.cellFuelPressure.Units = "bar";
+            this.cellFuelPressure.WarningLow = 3.0;
+            this.cellFuelPressure.DangerLow = 2.5;
+
+            this.cellLtft = new ValueCell();
+            this.cellLtft.Location = new Point(botX(3), botY1);
+            this.cellLtft.Size = new Size(botCellW, cellH);
+            this.cellLtft.Label = "FUEL TRIM (LT)";
+            this.cellLtft.Units = "factor";
+            this.cellLtft.WarningLow = 0.90;
+            this.cellLtft.WarningHigh = 1.10;
+            this.cellLtft.DangerLow = 0.85;
+            this.cellLtft.DangerHigh = 1.15;
+
+            this.cellPedal = new ValueCell();
+            this.cellPedal.Location = new Point(botX(4), botY1);
+            this.cellPedal.Size = new Size(botCellW, cellH);
+            this.cellPedal.Label = "PEDAL";
+            this.cellPedal.Units = "%";
+
+            this.cellSpeed = new ValueCell();
+            this.cellSpeed.Location = new Point(botX(5), botY1);
+            this.cellSpeed.Size = new Size(botCellW, cellH);
+            this.cellSpeed.Label = "SPEED";
+            this.cellSpeed.Units = "km/h";
+
+            // Dashboard status label
+            this.lblDashStatus = new Label();
+            this.lblDashStatus.Text = "Connect and start logging to see live data";
+            this.lblDashStatus.AutoSize = true;
+            this.lblDashStatus.ForeColor = Color.FromArgb(90, 90, 105);
+            this.lblDashStatus.Location = new Point(16, botY2 + 4);
+
+            this.tabPage3.Controls.AddRange(new Control[] {
+                this.gaugeRpm, this.gaugeBoost,
+                this.cellLambda, this.cellKnock, this.cellTiming, this.cellWastegate,
+                this.cellIat, this.cellCoolant,
+                this.cellMaf, this.cellLoad, this.cellFuelPressure, this.cellLtft,
+                this.cellPedal, this.cellSpeed,
+                this.lblDashStatus
             });
 
             // =================================================================
