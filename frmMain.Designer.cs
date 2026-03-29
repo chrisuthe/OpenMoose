@@ -9,7 +9,7 @@ namespace J2534
 
         private System.Windows.Forms.Timer flashTimer;
         private System.Windows.Forms.Timer readTimer;
-        private System.Windows.Forms.Timer logTimer;
+        // logTimer removed — logging now uses a background thread
 
         private MenuStrip menuMain;
         private ToolStripMenuItem fileToolStripMenuItem;
@@ -99,10 +99,6 @@ namespace J2534
             this.readTimer = new System.Windows.Forms.Timer(this.components);
             this.readTimer.Interval = 1000;
             this.readTimer.Tick += new System.EventHandler(this.readTimer_Tick);
-
-            this.logTimer = new System.Windows.Forms.Timer(this.components);
-            this.logTimer.Interval = 1;
-            this.logTimer.Tick += new System.EventHandler(this.logTimer_Tick_1);
 
             // =================================================================
             // MENU STRIP

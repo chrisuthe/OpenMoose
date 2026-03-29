@@ -1,7 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Net;
-using System.Net.Sockets;
 using System.Threading;
 
 namespace J2534.Logging;
@@ -56,7 +54,10 @@ public class ECULogger
 
 	private uint getNumMsgs()
 	{
-		return (uint)Math.Ceiling((double)(ecuParams.getTotalDataLength() - 3) / 7.0) + 1;
+		int totalLen = ecuParams.getTotalDataLength();
+		if (totalLen <= 3)
+			return 1;
+		return (uint)Math.Ceiling((double)(totalLen - 3) / 7.0) + 1;
 	}
 
 	public bool updateRecordData()
@@ -71,7 +72,15 @@ public class ECULogger
 			{
 				text += item.getLoggingDataString();
 			}
-			text = text.Split(new string[1] { "7AE6F000" }, StringSplitOptions.None)[1];
+
+			string[] parts = text.Split(new[] { "7AE6F000" }, StringSplitOptions.None);
+			if (parts.Length < 2 || string.IsNullOrEmpty(parts[1]))
+			{
+				dataAvailable = false;
+				return false;
+			}
+			text = parts[1];
+
 			foreach (ECUVariable ecuVar in ecuParams.ecuVars)
 			{
 				try
@@ -89,60 +98,53 @@ public class ECULogger
 						ecuVar.value = ecuVar.getHexValueFromString(input2);
 					}
 				}
-				catch (Exception ex)
+				catch (Exception)
 				{
 					ecuVar.value = 0;
-					ex.ToString();
 				}
 			}
 			dataAvailable = true;
 		}
-		catch (Exception ex2)
+		catch (Exception ex)
 		{
-			Console.WriteLine(ex2.ToString());
+			Console.WriteLine(ex.ToString());
 			dataAvailable = false;
 		}
 		return dataAvailable;
 	}
 
-	public static bool checkParamsValid(DateTime expDate)
-	{
-		return DateTime.Compare(getNetworkTime(), expDate) < 0;
-	}
-
-	private static DateTime getNetworkTime()
-	{
-		byte[] array = new byte[48];
-		array[0] = 27;
-		IPEndPoint remoteEP = new IPEndPoint(Dns.GetHostEntry("pool.ntp.org").AddressList[0], 123);
-		Socket socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-		socket.Connect(remoteEP);
-		socket.Send(array);
-		socket.Receive(array);
-		socket.Close();
-		ulong num = ((ulong)array[40] << 24) | ((ulong)array[41] << 16) | ((ulong)array[42] << 8) | array[43];
-		ulong num2 = ((ulong)array[44] << 24) | ((ulong)array[45] << 16) | ((ulong)array[46] << 8) | array[47];
-		ulong num3 = num * 1000 + num2 * 1000 / 4294967296L;
-		return new DateTime(1900, 1, 1).AddMilliseconds((long)num3);
-	}
-
+	/// <summary>
+	/// Registers all ECU variables for logging. Retries each variable up to 10 times.
+	/// Throws InvalidOperationException if the ECU does not acknowledge a variable.
+	/// </summary>
 	public void sendReqs()
 	{
 		clearReqs();
 		foreach (ECUVariable ecuVar in ecuParams.ecuVars)
 		{
 			CANPacket cANMsg = new CANPacket(ecuVar.getRequestData());
-			bool flag = false;
-			while (!flag)
+			bool ack = false;
+			for (int attempt = 0; attempt < 10 && !ack; attempt++)
 			{
-				flag |= dice.sendMsgCheckDiagResponse(cANMsg, CANChannel.HS, 234);
+				ack = dice.sendMsgCheckDiagResponse(cANMsg, CANChannel.HS, 234);
 			}
+			if (!ack)
+				throw new InvalidOperationException(
+					$"ECU did not acknowledge registration of variable '{ecuVar.name}' after 10 attempts.");
 		}
 	}
 
+	/// <summary>
+	/// Clears all registered logging variables. Retries up to 5 times.
+	/// </summary>
 	public bool clearReqs()
 	{
-		return dice.sendMsgCheckDiagResponse(ECULoggingCommands.msgCANClearRecordReqs, CANChannel.HS, 234);
+		for (int attempt = 0; attempt < 5; attempt++)
+		{
+			if (dice.sendMsgCheckDiagResponse(ECULoggingCommands.msgCANClearRecordReqs, CANChannel.HS, 234))
+				return true;
+		}
+		return false;
 	}
 
 	public bool VerifyLogList(ref List<CANPacket> cl, uint numMsgs, int index)
@@ -180,29 +182,36 @@ public class ECULogger
 		return true;
 	}
 
+	/// <summary>
+	/// Sends a single data request and parses the multi-frame response.
+	/// Returns true if data was successfully received, with the hex payload in result.
+	/// </summary>
 	public bool requestRecords(ref string result)
 	{
 		CANPacket cANMsg = new CANPacket(ECULoggingCommands.msgCANRequestRecordSetOnce);
 		uint maxNumMsgs = getNumMsgs();
-		uint num = maxNumMsgs;
+		uint expectedMsgs = maxNumMsgs;
 		uint timeout = 1000u;
 		List<CANPacket> cl = dice.sendMsgReadResponse(cANMsg, CANChannel.HS, ref maxNumMsgs, timeout);
-		Thread.Sleep(1);
-		if (cl.Count != num)
+
+		if (cl.Count != expectedMsgs)
 		{
-			result = "error";
+			result = "";
 			return false;
 		}
-		int index = 8;
-		if (!VerifyLogList(ref cl, num, index))
-		{
+
+		if (!VerifyLogList(ref cl, expectedMsgs, 8))
 			return false;
-		}
+
+		string raw = "";
 		foreach (CANPacket item in cl)
-		{
-			result += item.getLoggingDataString();
-		}
-		result = result.Split(new string[1] { "7AE6F000" }, StringSplitOptions.None)[1];
+			raw += item.getLoggingDataString();
+
+		string[] parts = raw.Split(new[] { "7AE6F000" }, StringSplitOptions.None);
+		if (parts.Length < 2 || string.IsNullOrEmpty(parts[1]))
+			return false;
+
+		result = parts[1];
 		return true;
 	}
 
@@ -218,22 +227,25 @@ public class ECULogger
 			recs_req = true;
 		}
 		List<CANPacket> cl = dice.ReadResponse(CANChannel.HS, ref maxNumMsgs, timeout);
-		Console.WriteLine("List count: " + cl.Count);
 		if (cl.Count != numMsgs)
 		{
-			result = "error";
+			result = "";
 			return false;
 		}
-		int index = 8;
-		if (!VerifyLogList(ref cl, numMsgs, index))
+		if (!VerifyLogList(ref cl, numMsgs, 8))
 		{
-			result = "bad list";
+			result = "";
 			return false;
 		}
+		string raw = "";
 		foreach (CANPacket item in cl)
-		{
-			result += item.getLoggingDataString();
-		}
+			raw += item.getLoggingDataString();
+
+		string[] parts = raw.Split(new[] { "7AE6F000" }, StringSplitOptions.None);
+		if (parts.Length < 2 || string.IsNullOrEmpty(parts[1]))
+			return false;
+
+		result = parts[1];
 		return true;
 	}
 

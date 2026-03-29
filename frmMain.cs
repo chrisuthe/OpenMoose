@@ -40,6 +40,9 @@ namespace J2534
         private ECUVariables eVars;
         private CultureInfo culture;
         private StreamWriter logFile;
+        private Thread loggingThread;
+        private volatile bool loggingActive;
+        private readonly object flashLock = new object();
 
         public frmMain()
         {
@@ -288,7 +291,7 @@ namespace J2534
         private void flashTimer_Tick(object sender, EventArgs e)
         {
             this.lblTime.Text = "Flash Time: " + this.flashTime.ToString() + "s";
-            lock (new object())
+            lock (this.flashLock)
             {
                 this.progressFlash.Value = this.flashTime > this.progressFlash.Maximum
                     ? this.progressFlash.Maximum : this.flashTime;
@@ -356,7 +359,7 @@ namespace J2534
         private void readTimer_Tick(object sender, EventArgs e)
         {
             this.lblTime.Text = "Read Time: " + this.flashTime.ToString() + "s";
-            lock (new object())
+            lock (this.flashLock)
             {
                 this.progressFlash.Value = this.flashTime > this.progressFlash.Maximum
                     ? this.progressFlash.Maximum : this.flashTime;
@@ -462,19 +465,20 @@ namespace J2534
 
         private void deserializeXML()
         {
-            if (this.eVars == null)
+            try
             {
+                this.eParams = ECUParameters.ReadObject(this.txtParamsFile.Text);
+                this.eVars = this.eParams.ecuVars;
+            }
+            catch (Exception)
+            {
+                this.eParams = new ECUParameters();
+                this.eVars = new ECUVariables();
                 this.txtParamsFile.Text = "";
                 this.setECUParams("");
                 MessageBox.Show("Error parsing parameters file!",
                     Application.ProductName, MessageBoxButtons.OK, MessageBoxIcon.Hand);
             }
-            try
-            {
-                this.eParams = XmlSerializer.ReadObject(this.txtParamsFile.Text);
-                this.eVars = this.eParams.ecuVars;
-            }
-            catch (Exception) { }
         }
 
         private void SetComboXML()
@@ -511,20 +515,41 @@ namespace J2534
         {
             try
             {
-                if (this.txtLogFile.Text.Equals(""))
+                if (string.IsNullOrEmpty(this.txtLogFile.Text))
                 {
                     MessageBox.Show("Please choose a log file.",
                         Application.ProductName, MessageBoxButtons.OK, MessageBoxIcon.Hand);
                     return;
                 }
 
+                // Parse parameters FIRST (bug fix: was after ECULogger construction)
+                this.parseParameters();
+                if (this.eVars == null || this.eVars.Count == 0)
+                {
+                    MessageBox.Show("No valid parameters loaded.",
+                        Application.ProductName, MessageBoxButtons.OK, MessageBoxIcon.Hand);
+                    return;
+                }
+
+                // Construct logger with current (just-parsed) params
                 this.logger = new ECULogger(this.dice, this.eParams);
                 if (!this.p80)
                     new DIMComm(this.dice, true).sendMessage("Logging...");
-                this.parseParameters();
-                this.logger.sendReqs();
-                this.logFile = new StreamWriter(this.txtLogFile.Text, false);
 
+                // Register variables with ECU (now has retry limits)
+                try
+                {
+                    this.logger.sendReqs();
+                }
+                catch (InvalidOperationException ex)
+                {
+                    MessageBox.Show("Failed to register logging variables:\n" + ex.Message,
+                        Application.ProductName, MessageBoxButtons.OK, MessageBoxIcon.Hand);
+                    return;
+                }
+
+                // Open log file and write CSV header
+                this.logFile = new StreamWriter(this.txtLogFile.Text, false);
                 if (this.eParams.displayTime)
                     this.logFile.Write("Time (sec),");
                 foreach (ECUVariable eVar in (List<ECUVariable>)this.eVars)
@@ -535,28 +560,51 @@ namespace J2534
                         this.logFile.Write(eVar.desc + "(" + eVar.units + ") " + eVar.name + ",");
                 }
                 this.logFile.WriteLine();
-                this.logTimer.Start();
+
+                // Start background logging thread (replaces 1ms UI timer)
+                this.loggingActive = true;
+                this.logTime = 0L;
                 this.startTimer();
                 this.changeButtonState(false);
                 this.cmdStartLogging.Enabled = false;
                 this.cmdStopLogging.Enabled = true;
                 ++this.numLogSessions;
                 this.tsslStatus.Text = "Logging...";
+
+                this.loggingThread = new Thread(LoggingWorker);
+                this.loggingThread.IsBackground = true;
+                this.loggingThread.Start();
             }
             catch (Exception ex)
             {
-                Console.WriteLine(ex.ToString());
+                MessageBox.Show("Error starting logging: " + ex.Message,
+                    Application.ProductName, MessageBoxButtons.OK, MessageBoxIcon.Hand);
             }
         }
 
         private void cmdStopLogging_Click(object sender, EventArgs e)
         {
-            this.dice.sendMsg(new CANPacket(ECULoggingCommands.msgCANRequestRecordSetStop), CANChannel.HS);
-            if (this.logger.hs_Logging)
-                this.logger.recs_req = false;
-            this.logFile.Close();
+            this.loggingActive = false;
+            this.loggingThread?.Join(2000);
 
-            string[] strArray = this.txtLogFile.Text.Split(new string[] { ".csv" }, StringSplitOptions.None);
+            try
+            {
+                this.dice.sendMsg(new CANPacket(ECULoggingCommands.msgCANRequestRecordSetStop), CANChannel.HS);
+                if (this.logger != null && this.logger.hs_Logging)
+                    this.logger.recs_req = false;
+            }
+            catch (Exception) { }
+
+            StopLoggingCleanup();
+            this.tsslStatus.Text = "Logging stopped";
+        }
+
+        private void StopLoggingCleanup()
+        {
+            try { this.logFile?.Close(); } catch { }
+            try { this.logger?.clearReqs(); } catch { }
+
+            string[] strArray = this.txtLogFile.Text.Split(new[] { ".csv" }, StringSplitOptions.None);
             if (strArray.Length != 0)
                 this.txtLogFile.Text = strArray[0] + "_" + this.numLogSessions + ".csv";
             else
@@ -564,71 +612,120 @@ namespace J2534
 
             try
             {
-                this.logTimer.Stop();
                 this.stopTimer();
                 this.lblLogTime.Text = this.getLogTimeSeconds(false) + "s";
                 this.logTime = 0L;
             }
-            catch (Exception ex) { Console.WriteLine(ex.ToString()); }
+            catch { }
 
-            this.logger.clearReqs();
             this.changeButtonState(true);
             this.cmdStopLogging.Enabled = false;
             this.cmdStartLogging.Enabled = true;
-            this.tsslStatus.Text = "Logging stopped";
         }
 
-        private void logTimer_Tick_1(object sender, EventArgs e)
+        /// <summary>
+        /// Background thread that polls the ECU at ~50ms intervals (matching VolvoTools).
+        /// Runs off the UI thread to prevent freezing. Uses Invoke for UI updates.
+        /// Aborts after 10 consecutive errors.
+        /// </summary>
+        private void LoggingWorker()
         {
-            Thread.CurrentThread.CurrentCulture = this.culture;
-            Thread.CurrentThread.CurrentUICulture = this.culture;
-            string result = "";
-            if (!this.logger.requestRecords(ref result))
-                return;
+            int consecutiveErrors = 0;
+            const int maxErrors = 10;
 
-            this.processReqs(result);
-            if (this.eParams.displayTime)
-                this.logFile.Write(this.getLogTimeSeconds(true) + ",");
-
-            foreach (ECUVariable eVar in (List<ECUVariable>)this.eVars)
+            while (this.loggingActive && consecutiveErrors < maxErrors)
             {
-                int num = (int)eVar.value;
-                if (eVar.signed)
-                    num = !eVar.word ? (int)(sbyte)eVar.value : (int)(short)eVar.value;
-                double dbValue = (double)num * eVar.factor + eVar.offset;
-                eVar.result = this.logger.getDoublePrecision(dbValue, eVar.precision);
-                this.logFile.Write(eVar.result + ",");
+                try
+                {
+                    Thread.CurrentThread.CurrentCulture = this.culture;
+                    string result = "";
+                    if (!this.logger.requestRecords(ref result))
+                    {
+                        consecutiveErrors++;
+                        Thread.Sleep(50);
+                        continue;
+                    }
+
+                    consecutiveErrors = 0;
+                    this.processReqs(result);
+
+                    // Write to CSV (logFile owned exclusively by this thread while logging)
+                    if (this.eParams.displayTime)
+                        this.logFile.Write(this.getLogTimeSeconds(true) + ",");
+
+                    foreach (ECUVariable eVar in (List<ECUVariable>)this.eVars)
+                    {
+                        int num = (int)eVar.value;
+                        if (eVar.signed)
+                            num = !eVar.word ? (int)(sbyte)eVar.value : (int)(short)eVar.value;
+                        double dbValue = (double)num * eVar.factor + eVar.offset;
+                        eVar.result = this.logger.getDoublePrecision(dbValue, eVar.precision);
+                        this.logFile.Write(eVar.result + ",");
+                    }
+                    this.logFile.WriteLine();
+
+                    // Update UI via Invoke (thread-safe)
+                    try { this.Invoke((Action)UpdateLoggingUI); }
+                    catch (ObjectDisposedException) { break; }
+                }
+                catch (Exception ex)
+                {
+                    consecutiveErrors++;
+                    Console.WriteLine("Logging error: " + ex.Message);
+                }
+
+                Thread.Sleep(50);
             }
-            this.logFile.WriteLine();
+
+            if (consecutiveErrors >= maxErrors)
+            {
+                try
+                {
+                    this.Invoke((Action)(() =>
+                    {
+                        this.tsslStatus.Text = "Logging stopped: too many consecutive errors";
+                        StopLoggingCleanup();
+                    }));
+                }
+                catch (ObjectDisposedException) { }
+            }
+        }
+
+        private void UpdateLoggingUI()
+        {
             this.lblLogTime.Text = this.getLogTimeSeconds(false) + "s";
 
             if (!this.chkshowvitals.Checked)
                 return;
 
-            var list1 = this.eVars.Where(x => x.name.Contains("pvdkds_w")).ToList();
-            if (list1.Count > 0)
+            var boostList = this.eVars.Where(x => x.name.Contains("pvdkds_w")).ToList();
+            if (boostList.Count > 0)
             {
                 if (this.chkPSI.Checked)
                 {
-                    double num = (double.Parse(list1[0].result) - 1000.0) / 68.9475729;
-                    this.vitals_boost.Text = this.logger.getDoublePrecision(num > 0.0 ? num : 0.0, list1[0].precision);
+                    double num = (double.Parse(boostList[0].result) - 1000.0) / 68.9475729;
+                    this.vitals_boost.Text = this.logger.getDoublePrecision(num > 0.0 ? num : 0.0, boostList[0].precision);
                 }
                 else
-                    this.vitals_boost.Text = list1[0].result;
+                    this.vitals_boost.Text = boostList[0].result;
             }
 
-            this.vitals_lambda.Text = this.eVars.Where(x => x.name.Contains("lamsoni_w")).ToList()[0].result;
-            var list2 = this.eVars.Where(x => x.name.Contains("wkrm")).ToList();
-            if (list2.Count > 0)
-                this.vitals_retard.Text = list2[0].result;
+            var lambdaList = this.eVars.Where(x => x.name.Contains("lamsoni_w")).ToList();
+            if (lambdaList.Count > 0)
+                this.vitals_lambda.Text = lambdaList[0].result;
 
-            var list4 = this.eVars.Where(x => x.name.Contains("pistnd_w")).ToList();
-            if (list4.Count > 0)
-                this.vitals_fuelpressure.Text = list4[0].result;
+            var retardList = this.eVars.Where(x => x.name.Contains("wkrm")).ToList();
+            if (retardList.Count > 0)
+                this.vitals_retard.Text = retardList[0].result;
 
-            var list3 = this.eVars.Where(x => x.name.Contains(this.comboBox_xmlparams.SelectedValue.ToString())).ToList();
-            if (list3.Count > 0)
-                this.vitals_custom.Text = list3[0].result;
+            // BUG FIX: was checking retardList.Count instead of fuelList.Count
+            var fuelList = this.eVars.Where(x => x.name.Contains("pistnd_w")).ToList();
+            if (fuelList.Count > 0)
+                this.vitals_fuelpressure.Text = fuelList[0].result;
+
+            var customList = this.eVars.Where(x => x.name.Contains(this.comboBox_xmlparams.SelectedValue?.ToString() ?? "")).ToList();
+            if (customList.Count > 0)
+                this.vitals_custom.Text = customList[0].result;
         }
 
         private void comboBox_xmlparams_SelectedIndexChanged(object sender, EventArgs e)

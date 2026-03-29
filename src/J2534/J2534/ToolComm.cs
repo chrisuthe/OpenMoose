@@ -93,17 +93,21 @@ public class ToolComm
 		uint timeout = 90000u;
 		sendMsgHelper(CANMsg, channelType, clearRXBuffer: true, 240000u);
 		IntPtr intPtr = Marshal.AllocHGlobal((int)(Marshal.SizeOf(typeof(PASSTHRU_MSG)) * numMsgs));
-		dice.PassThruReadMsgs(deviceID, channelID, intPtr, ref numMsgs, timeout);
-		J2534Message j2534Message = new J2534Message(intPtr, (int)numMsgs, (int)(numMsgs + 1));
-		for (int i = 0; i < numMsgs; i++)
+		try
 		{
-			if (new CANPacket(j2534Message[i]).getResponseByte() == responseByte)
+			dice.PassThruReadMsgs(deviceID, channelID, intPtr, ref numMsgs, timeout);
+			J2534Message j2534Message = new J2534Message(intPtr, (int)numMsgs, (int)(numMsgs + 1));
+			for (int i = 0; i < numMsgs; i++)
 			{
-				return true;
+				if (new CANPacket(j2534Message[i]).getResponseByte() == responseByte)
+					return true;
 			}
+			return false;
 		}
-		Marshal.FreeHGlobal(j2534Message.Pointer);
-		return false;
+		finally
+		{
+			Marshal.FreeHGlobal(intPtr);
+		}
 	}
 
 	public bool sendMsgCheckDiagResponse(CANPacket CANMsg, CANChannel channelType, byte responseByte)
@@ -118,17 +122,21 @@ public class ToolComm
 		uint timeout = 900u;
 		sendMsgHelper(CANMsg, channelType, clearRXBuffer: true, 900u);
 		IntPtr intPtr = Marshal.AllocHGlobal((int)(Marshal.SizeOf(typeof(PASSTHRU_MSG)) * numMsgs));
-		dice.PassThruReadMsgs(deviceID, channelID, intPtr, ref numMsgs, timeout);
-		J2534Message j2534Message = new J2534Message(intPtr, (int)numMsgs, (int)(numMsgs + 1));
-		for (int i = 0; i < numMsgs; i++)
+		try
 		{
-			if (new CANPacket(j2534Message[i]).getDiagResponseByte() == responseByte)
+			dice.PassThruReadMsgs(deviceID, channelID, intPtr, ref numMsgs, timeout);
+			J2534Message j2534Message = new J2534Message(intPtr, (int)numMsgs, (int)(numMsgs + 1));
+			for (int i = 0; i < numMsgs; i++)
 			{
-				return true;
+				if (new CANPacket(j2534Message[i]).getDiagResponseByte() == responseByte)
+					return true;
 			}
+			return false;
 		}
-		Marshal.FreeHGlobal(j2534Message.Pointer);
-		return false;
+		finally
+		{
+			Marshal.FreeHGlobal(intPtr);
+		}
 	}
 
 	public CANPacket sendMsgReadResponse(CANPacket CANMsg, CANChannel channelType)
