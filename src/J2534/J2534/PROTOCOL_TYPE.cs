@@ -1,0 +1,18 @@
+namespace J2534;
+
+public enum PROTOCOL_TYPE : uint
+{
+	J1850VPW = 1u,
+	J1850PWM = 2u,
+	ISO9141 = 3u,
+	ISO14230 = 4u,
+	CAN = 5u,
+	ISO15765 = 6u,
+	SCI_A_ENGINE = 7u,
+	SCI_A_TRANS_J2610 = 8u,
+	SCI_B_ENGINE_J2610 = 9u,
+	SCI_B_TRANS_J2610 = 10u,
+	CAN_PS = 32772u,
+	ISO15765_PS = 32773u,
+	CAN_XON_XOFF = 268435457u
+}
